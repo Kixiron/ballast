@@ -1,0 +1,38 @@
+[package]
+name = "ballast"
+version = "0.1.0"
+authors = ["Chase Wilson <contact@chasewilson.dev>"]
+edition = "2018"
+
+[features]
+default = ["minimalloc", "log"]
+logging = ["log"]
+minimalloc = ["mimalloc"]
+
+[dependencies.crossbeam]
+version = "0.7.3"
+
+[dependencies.log]
+version = "0.4.8"
+optional = true
+
+[dependencies.fxhash]
+version = "0.2.1"
+
+[dependencies.mimalloc]
+version = "0.1.15"
+optional = true
+
+[target.'cfg(target_family = "windows")'.dependencies.winapi]
+version = "0.3.8"
+default-features = false
+features = ["sysinfoapi"]
+
+[target.'cfg(target_family = "unix")'.dependencies]
+libc = "0.2.66"
+
+[dev-dependencies.color-backtrace]
+version = "0.3.0"
+
+[dev-dependencies.simple_logger]
+version = "1.5.0"
