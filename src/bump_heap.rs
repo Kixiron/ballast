@@ -13,11 +13,6 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
-trait RootHandler {
-    fn is_rooted(&self) -> bool;
-    fn size(&self) -> usize;
-}
-
 pub trait Heap {}
 
 impl<T> Heap for T {}
@@ -28,7 +23,7 @@ struct HeapValue<T: Heap + ?Sized> {
     value: T,
 }
 
-impl<T: Heap + Sized> HeapValue<T> {
+impl<T> HeapValue<T> {
     pub fn new(value: T) -> Self {
         Self {
             rooted: true,
@@ -36,15 +31,9 @@ impl<T: Heap + Sized> HeapValue<T> {
             value,
         }
     }
-}
 
-impl<T> RootHandler for HeapValue<T> {
-    fn is_rooted(&self) -> bool {
-        self.rooted
-    }
-
-    fn size(&self) -> usize {
-        mem::size_of::<HeapValue<T>>()
+    pub fn size(&self) -> usize {
+        mem::size_of::<Self>()
     }
 }
 
@@ -88,30 +77,6 @@ struct RootedInner<T: ?Sized + Heap> {
     inner: *mut HeapValue<T>,
 }
 
-impl<T> RootHandler for RootedInner<T> {
-    fn is_rooted(&self) -> bool {
-        unsafe { (&*self.inner).is_rooted() }
-    }
-
-    fn size(&self) -> usize {
-        unsafe { (&*self.inner).size() }
-    }
-}
-
-struct RootHandle {
-    root_inner: Pin<Box<dyn RootHandler>>,
-}
-
-impl RootHandler for RootHandle {
-    fn is_rooted(&self) -> bool {
-        self.root_inner.is_rooted()
-    }
-
-    fn size(&self) -> usize {
-        self.root_inner.size()
-    }
-}
-
 pub struct BumpHeap {
     young_start: HeapPointer,
     young_end: HeapPointer,
@@ -121,7 +86,7 @@ pub struct BumpHeap {
     old_end: HeapPointer,
     old_current: HeapPointer,
 
-    roots: Vec<RootHandle>,
+    roots: Vec<Pin<Box<RootedInner<dyn Heap>>>>,
     next_id: AllocId,
     allocations: Vec<Pin<Box<RootedInner<dyn Heap>>>>,
 }
@@ -185,7 +150,8 @@ impl BumpHeap {
         });
         let inner_ptr = inner.as_mut().get_unchecked_mut() as *mut RootedInner<T>;
 
-        self.roots.push(RootHandle { root_inner: inner });
+        let coerce = |boxed: Pin<Box<RootedInner<T>>>| -> Pin<Box<RootedInner<dyn Heap>>> { boxed };
+        self.roots.push(coerce(inner));
 
         ptr.as_mut_ptr::<HeapValue<T>>()
             .write(HeapValue::new(value));
@@ -194,10 +160,28 @@ impl BumpHeap {
             "Allocated object successfully at {:p}",
             ptr.as_ptr::<HeapValue<T>>()
         );
+
         Rooted { inner: inner_ptr }
     }
 
-    pub fn scavenge(&mut self) {}
+    pub fn scavenge(&mut self) {
+        for root in self.roots.drain(..) {
+            unsafe {
+                root.inner
+                    .copy_to(self.old_current.as_mut_ptr::<HeapValue<dyn Heap>>(), 1)
+            };
+
+            self.old_current += unsafe { (&*root.inner) }.size();
+        }
+
+        // Zero out the young heap
+        unsafe {
+            self.young_start
+                .as_mut_ptr::<u8>()
+                .write_bytes(0x00, *self.young_end - *self.young_start);
+        }
+        self.young_current = self.young_start;
+    }
 }
 
 pub struct BumpOptions {
