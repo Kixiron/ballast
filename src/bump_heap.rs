@@ -101,21 +101,24 @@ impl BumpHeap {
             memory::page_size(),
         )
         .unwrap();
+        let total_heap_size = layout.size() + memory::padding_for(layout.size(), layout.align());
 
         let allocation = HeapPointer::new(unsafe { alloc::alloc_zeroed(layout) as usize });
         assert!(!allocation.is_null());
 
         let (young_start, young_current) = (allocation, allocation);
-        let young_end = allocation + options.young_heap_size;
 
-        let old_start = allocation + options.young_heap_size;
+        let old_end = young_start + total_heap_size;
+        let old_start = old_end - options.old_heap_size;
         let old_current = old_start;
-        let old_end = old_start + options.old_heap_size;
+
+        let young_end = old_end - 1usize;
 
         log::info!(
-            "Constructed bump allocator with {}kb young generation and {}kb old generation",
-            options.young_heap_size / 1024,
-            options.old_heap_size / 1024,
+            "Constructed bump allocator with {}kb young generation and {}kb old generation for a total of {}kb allocated",
+            (*young_end - *young_start) / 1024,
+            (*old_end - *old_start) / 1024,
+            total_heap_size / 1024,
         );
 
         Self {
@@ -187,7 +190,7 @@ impl BumpHeap {
                     });
                 }
 
-                self.old_current += unsafe { (&*root.inner) }.size;
+                self.old_current += unsafe { &*root.inner }.size;
             } else {
                 removal.push(idx);
             }
