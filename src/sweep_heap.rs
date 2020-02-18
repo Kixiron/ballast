@@ -180,6 +180,7 @@ impl Drop for SweepHeap {
     }
 }
 
+/*
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,3 +226,4 @@ mod tests {
         drop(heap);
     }
 }
+*/

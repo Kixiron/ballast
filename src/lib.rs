@@ -1,3 +1,5 @@
+#![feature(raw)]
+
 use std::alloc::Layout;
 
 #[cfg(feature = "log")]
