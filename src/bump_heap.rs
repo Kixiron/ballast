@@ -112,7 +112,7 @@ impl BumpHeap {
         let old_start = old_end - options.old_heap_size;
         let old_current = old_start;
 
-        let young_end = old_end - 1usize;
+        let young_end = old_start;
 
         log::info!(
             "Constructed bump allocator with {}kb young generation and {}kb old generation for a total of {}kb allocated",
@@ -167,20 +167,40 @@ impl BumpHeap {
     pub fn scavenge(&mut self) {
         log::info!("Starting a Scavenge cycle");
 
-        let mut removal = Vec::with_capacity(self.roots.len() / 2);
-        for (idx, root) in self.roots.iter_mut().enumerate() {
+        let mut roots = Vec::with_capacity(self.roots.len());
+        mem::swap(&mut self.roots, &mut roots);
+
+        for mut root in roots {
             log::trace!("Moving rooted object at {:p} to old generation", root.inner);
 
             debug_assert!(!root.inner.is_null());
             if unsafe { &*root.inner }.rooted {
-                unsafe {
-                    // This is cursed
-                    ptr::copy(
-                        root.inner as *const u8,
-                        self.old_current.as_mut_ptr::<u8>(),
-                        (&*root.inner).size,
-                    );
-                };
+                let size = unsafe { &*root.inner }.size;
+                if self.old_current + size < self.old_end {
+                    unsafe {
+                        // This is cursed
+                        ptr::copy(
+                            root.inner as *const u8,
+                            self.old_current.as_mut_ptr::<u8>(),
+                            size,
+                        );
+                    }
+                } else {
+                    self.major();
+
+                    if self.old_current + size < self.old_end {
+                        unsafe {
+                            // This is cursed
+                            ptr::copy(
+                                root.inner as *const u8,
+                                self.old_current.as_mut_ptr::<u8>(),
+                                size,
+                            );
+                        };
+                    } else {
+                        panic!("Old Generation OOM");
+                    }
+                }
 
                 let raw_root: raw::TraitObject = unsafe { mem::transmute(root.inner) };
                 unsafe {
@@ -190,14 +210,9 @@ impl BumpHeap {
                     });
                 }
 
-                self.old_current += unsafe { &*root.inner }.size;
-            } else {
-                removal.push(idx);
+                self.old_current += size;
+                self.roots.push(root);
             }
-        }
-
-        for (offset, idx) in removal.into_iter().enumerate() {
-            self.roots.remove(idx - offset);
         }
 
         // Zero out the young heap
@@ -209,6 +224,12 @@ impl BumpHeap {
         self.young_current = self.young_start;
 
         log::info!("Finished Scavenge cycle");
+    }
+
+    pub fn major(&mut self) {
+        log::info!("Starting a Major cleanup cycle");
+
+        todo!()
     }
 }
 
@@ -269,8 +290,6 @@ mod tests {
 
     #[test]
     fn allocate() {
-        simple_logger::init();
-
         let mut bump = BumpHeap::new(BumpOptions::default());
 
         let one_hundred: Rooted<usize> = unsafe { bump.alloc(100) };
@@ -279,8 +298,6 @@ mod tests {
 
     #[test]
     fn trigger_scavenge() {
-        simple_logger::init();
-
         let mut bump = BumpHeap::new(BumpOptions::default());
 
         let i: usize = 1000;
@@ -289,8 +306,18 @@ mod tests {
 
         bump.scavenge();
         assert_eq!(*rooted, i);
+    }
 
-        drop(rooted);
-        drop(bump);
+    #[test]
+    fn allocate_a_bunch() {
+        simple_logger::init();
+
+        let mut bump = BumpHeap::new(BumpOptions::default());
+
+        for i in 0..u16::max_value() as usize {
+            let rooted: Rooted<usize> = unsafe { bump.alloc(i) };
+            assert_eq!(*rooted, i);
+            drop(rooted);
+        }
     }
 }
