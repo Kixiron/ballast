@@ -77,9 +77,10 @@ impl<T: ?Sized + Any> Drop for Rooted<T> {
     }
 }
 
+#[derive(Debug)]
 struct RootedInner<T: ?Sized + Any> {
     inner: *mut HeapValue<T>,
-    __unpin: PhantomPinned,
+    __pinned: PhantomPinned,
 }
 
 pub struct BumpHeap {
@@ -101,6 +102,7 @@ impl BumpHeap {
             memory::page_size(),
         )
         .unwrap();
+        /*
         let total_heap_size = layout.size() + memory::padding_for(layout.size(), layout.align());
 
         let allocation = HeapPointer::new(unsafe { alloc::alloc_zeroed(layout) as usize });
@@ -113,6 +115,18 @@ impl BumpHeap {
         let old_current = old_start;
 
         let young_end = old_start;
+        */
+
+        let total_heap_size = layout.size();
+
+        let allocation = HeapPointer::new(unsafe { alloc::alloc_zeroed(layout) as usize });
+        assert!(!allocation.is_null());
+
+        let (young_start, young_current) = (allocation, allocation);
+        let young_end = young_start + options.young_heap_size;
+
+        let (old_start, old_current) = (young_end, young_end);
+        let old_end = old_start + options.old_heap_size;
 
         log::info!(
             "Constructed bump allocator with {}kb young generation and {}kb old generation for a total of {}kb allocated",
@@ -139,25 +153,37 @@ impl BumpHeap {
         log::trace!("Allocating object of size {}", allocation_size);
 
         // TODO: https://fitzgeraldnick.com/2019/11/01/always-bump-downwards.html
-        if self.young_current + allocation_size >= self.young_end {
+        if self.young_current + allocation_size > self.young_end {
             log::trace!("Young generation OOM, starting scavenge");
             self.scavenge();
+
+            if self.young_current + allocation_size > self.young_end {
+                panic!("Allocation too large for young generation");
+            }
         }
 
         let ptr = self.young_current;
         self.young_current += allocation_size;
 
         debug_assert!(!ptr.is_null());
+        ptr.as_mut_ptr::<HeapValue<T>>()
+            .write(HeapValue::new(value));
+
         let mut inner = Box::pin(RootedInner {
             inner: ptr.as_mut_ptr::<HeapValue<T>>(),
-            __unpin: PhantomPinned,
+            __pinned: PhantomPinned,
         });
         let inner_ptr = inner.as_mut().get_unchecked_mut() as *mut RootedInner<T>;
 
-        self.roots.push(std::mem::transmute(inner));
+        // fn coerce<T: Any + 'static>(
+        //     boxed: Pin<Box<RootedInner<T>>>,
+        // ) -> Pin<Box<RootedInner<dyn Any + 'static>>> {
+        //     boxed
+        // };
+        //
+        // self.roots.push(coerce(inner));
 
-        ptr.as_mut_ptr::<HeapValue<T>>()
-            .write(HeapValue::new(value));
+        self.roots.push(mem::transmute(inner));
 
         log::trace!("Allocated object successfully at {:p}", inner_ptr);
 
@@ -165,20 +191,15 @@ impl BumpHeap {
     }
 
     pub fn scavenge(&mut self) {
-        log::info!("Starting a Scavenge cycle");
-
         let mut roots = Vec::with_capacity(self.roots.len());
         mem::swap(&mut self.roots, &mut roots);
 
         for mut root in roots {
-            log::trace!("Moving rooted object at {:p} to old generation", root.inner);
-
-            debug_assert!(!root.inner.is_null());
+            assert!(!root.inner.is_null());
             if unsafe { &*root.inner }.rooted {
                 let size = unsafe { &*root.inner }.size;
                 if self.old_current + size < self.old_end {
                     unsafe {
-                        // This is cursed
                         ptr::copy(
                             root.inner as *const u8,
                             self.old_current.as_mut_ptr::<u8>(),
@@ -190,7 +211,6 @@ impl BumpHeap {
 
                     if self.old_current + size < self.old_end {
                         unsafe {
-                            // This is cursed
                             ptr::copy(
                                 root.inner as *const u8,
                                 self.old_current.as_mut_ptr::<u8>(),
@@ -214,6 +234,8 @@ impl BumpHeap {
                 self.roots.push(root);
             }
         }
+
+        log::trace!("Finished processing roots");
 
         // Zero out the young heap
         unsafe {
@@ -315,6 +337,8 @@ mod tests {
         let mut bump = BumpHeap::new(BumpOptions::default());
 
         for i in 0..u16::max_value() as usize {
+            crate::log::trace!("Number {}", i);
+
             let rooted: Rooted<usize> = unsafe { bump.alloc(i) };
             assert_eq!(*rooted, i);
             drop(rooted);
