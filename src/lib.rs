@@ -36,7 +36,6 @@ mod weight;
 pub use bump_heap::BumpHeap;
 use free_list::*;
 use memory::*;
-pub use sweep_heap::SweepHeap;
 use weight::*;
 
 type Result<T> = std::result::Result<T, Error>;

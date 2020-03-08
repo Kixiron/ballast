@@ -9,6 +9,11 @@ impl AllocId {
     pub const fn new(id: usize) -> Self {
         Self(id)
     }
+
+    #[inline(always)]
+    pub fn increment(&mut self) {
+        self.0 += 1;
+    }
 }
 
 impl From<usize> for AllocId {

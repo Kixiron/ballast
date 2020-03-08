@@ -2,25 +2,19 @@ use super::{
     free_list::*,
     memory::{self, AllocId, HeapPointer},
     weight::*,
-    Error, Result,
 };
-use fxhash::FxBuildHasher;
+use crate::bump_heap::RootedInner;
 use std::{
-    alloc::{self, Layout},
-    collections::{HashMap, HashSet},
-    mem, ptr, slice,
+    alloc::{self},
+    mem,
+    pin::Pin,
 };
 
 #[derive(Debug)]
-pub struct SweepHeap {
+pub(crate) struct SweepHeap {
     start: HeapPointer,
     size: usize,
     free_list: FreeList,
-    roots: Vec<AllocId>,
-    white: HashMap<AllocId, Weight, FxBuildHasher>,
-    grey: HashMap<AllocId, Weight, FxBuildHasher>,
-    black: HashMap<AllocId, Weight, FxBuildHasher>,
-    next_id: AllocId,
 }
 
 impl SweepHeap {
@@ -39,130 +33,34 @@ impl SweepHeap {
             start,
             size,
             free_list: FreeList::new(start, size),
-            roots: Vec::with_capacity(50),
-            white: HashMap::with_hasher(FxBuildHasher::default()),
-            grey: HashMap::with_hasher(FxBuildHasher::default()),
-            black: HashMap::with_hasher(FxBuildHasher::default()),
-            next_id: AllocId::new(0),
         }
     }
 
-    pub fn alloc<T: std::fmt::Debug>(&mut self, data: T) -> Option<AllocId> {
-        let (ptr, pocket_size) = self.free_list.alloc(mem::size_of::<T>())?;
-        let id = self.next_id;
-        self.next_id += 1usize;
-
-        // Safety: The pointer provided by `FreeList::alloc` is trusted to be valid
-        unsafe { ptr.as_mut_ptr::<T>().write(data) };
-
-        self.white.insert(
-            id,
-            Weight::new(
-                ptr,
-                mem::size_of::<T>(),
-                PocketSize::from_pocket_size(pocket_size),
-            ),
-        );
-
-        Some(id)
-    }
-
-    pub fn write<T>(&self, id: AllocId, data: T) -> Result<()> {
-        let ptr = self.get_ptr(id).ok_or(Error::NoAllocationFound)?;
-
-        // Safety: The pointer stored in one of the various hashmaps should be up-to-date
-        unsafe { ptr.as_mut_ptr::<T>().write(data) };
-
-        Ok(())
-    }
-
-    pub fn get<T>(&self, id: AllocId) -> Result<T> {
-        let weight = self.get_weight(id).ok_or(Error::NoAllocationFound)?;
-        // TODO: `<=` might be alright
-        if weight.size() != mem::size_of::<T>() {
-            return Err(Error::SizeMisalign);
-        }
-
-        // TODO: Should `MaybeUninit::zeroed()` be used?
-        let mut output = mem::MaybeUninit::uninit();
-        // Safety: The pointers contained in the heap should be A: Non-null and B: Valid
-        unsafe { ptr::copy_nonoverlapping(weight.ptr().as_mut_ptr(), output.as_mut_ptr(), 1) };
-
-        // Safety: If the copy happens, then the output should be initialized
-        // to the value at `weight.ptr`
-        Ok(unsafe { output.assume_init() })
-    }
-
-    #[inline]
-    fn get_weight(&self, id: AllocId) -> Option<&Weight> {
-        if let Some(weight) = self.black.get(&id) {
-            Some(weight)
-        } else if let Some(weight) = self.grey.get(&id) {
-            Some(weight)
-        } else if let Some(weight) = self.white.get(&id) {
-            Some(weight)
-        } else {
-            None
+    pub const fn from_region(start: HeapPointer, size: usize) -> Self {
+        Self {
+            start,
+            size,
+            free_list: FreeList::new(start, size),
         }
     }
 
-    #[inline]
-    fn get_weight_mut(&mut self, id: AllocId) -> Option<&mut Weight> {
-        if let Some(weight) = self.black.get_mut(&id) {
-            Some(weight)
-        } else if let Some(weight) = self.grey.get_mut(&id) {
-            Some(weight)
-        } else if let Some(weight) = self.white.get_mut(&id) {
-            Some(weight)
-        } else {
-            None
-        }
+    pub fn alloc(&mut self, size: usize) -> Option<(HeapPointer, usize)> {
+        self.free_list.alloc(size)
     }
 
-    #[inline]
-    pub fn contains(&self, id: AllocId) -> bool {
-        self.black.contains_key(&id) || self.grey.contains_key(&id) || self.white.contains_key(&id)
-    }
+    pub fn collect(&mut self, roots: &mut Vec<Pin<Box<RootedInner>>>) {
+        self.sweep(roots);
 
-    #[inline]
-    fn get_ptr(&self, id: AllocId) -> Option<HeapPointer> {
-        Some(self.get_weight(id)?.ptr())
-    }
-
-    pub fn collect(&mut self) {
-        self.sweep();
-
-        if self.fragmentation() > 50.0 {
+        if self.fragmentation() > 0.50 {
             self.compact();
         }
     }
 
-    pub fn sweep(&mut self) {
-        let mut to_mark = Vec::with_capacity(self.grey.len() + self.white.len() / 3);
-        to_mark.extend_from_slice(&self.grey.keys().copied().collect::<Vec<_>>());
-
-        while let Some(id) = to_mark.pop() {
-            let weight = self.get_weight_mut(id).unwrap();
-            weight.shade = Shade::Black;
-
-            to_mark.extend_from_slice(&weight.children)
-        }
-
-        for (_id, weight) in self.white.drain() {
-            self.free_list.reclaim(weight);
-        }
+    pub fn sweep(&mut self, roots: &mut Vec<Pin<Box<RootedInner>>>) {
+        for (idx, root) in roots.iter_mut().enumerate() {}
     }
 
     pub fn compact(&mut self) {}
-
-    pub fn root(&mut self, id: AllocId) -> Result<()> {
-        self.get_weight_mut(id)
-            .ok_or(Error::NoAllocationFound)?
-            .shade = Shade::Grey;
-        self.roots.push(id);
-
-        Ok(())
-    }
 
     #[inline]
     pub fn fragmentation(&self) -> f32 {
