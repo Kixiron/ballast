@@ -1,150 +1,16 @@
-use super::{
-    memory::{self, AllocId, HeapPointer},
-    weight::Weight,
+use crate::{
+    memory::{self, HeapPointer},
+    rooted::{ContainingHeap, HeapValue, Rooted, RootedInner},
+    sweep_heap::SweepHeap,
 };
-use crate::{log, sweep_heap::SweepHeap};
-use fxhash::FxBuildHasher;
-use std::{
-    alloc::{self, Layout},
+
+use alloc::{alloc::Layout, boxed::Box, vec::Vec};
+use core::{
     any::Any,
-    collections::HashMap,
-    marker::{PhantomData, PhantomPinned},
     mem::{self, ManuallyDrop},
     pin::Pin,
     ptr, raw,
-    sync::atomic::AtomicBool,
 };
-
-pub(crate) struct HeapValue<T: Any + ?Sized + 'static> {
-    value: T,
-}
-
-impl<T> HeapValue<T> {
-    pub(crate) const fn new(value: T) -> Self {
-        Self { value }
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub(crate) enum Color {
-    Black,
-    Grey,
-    White,
-}
-
-#[derive(Debug, PartialEq)]
-pub struct Rooted<T: ?Sized + Any> {
-    static_inner: *mut RootedInner,
-    __type: PhantomData<T>,
-}
-
-impl<T: ?Sized + Any> Rooted<T> {
-    pub(crate) fn new(ptr: *mut RootedInner) -> Self {
-        Self {
-            static_inner: ptr,
-            __type: PhantomData,
-        }
-    }
-
-    pub(crate) fn is_null(&self) -> bool {
-        self.static_inner.is_null()
-    }
-
-    pub(crate) fn inner(&self) -> &RootedInner {
-        unsafe { &*self.static_inner }
-    }
-
-    pub(crate) fn inner_mut(&mut self) -> &mut RootedInner {
-        unsafe { &mut *self.static_inner }
-    }
-}
-
-impl<T: Sized + Any> std::ops::Deref for Rooted<T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        debug_assert!(!self.is_null());
-        debug_assert!(!self.inner().is_null());
-
-        log::info!("Accessing rooted value at {:p}", self.inner().value_ptr());
-
-        self.inner().value().value.downcast_ref().unwrap()
-    }
-}
-
-impl<T: ?Sized + Any> Drop for Rooted<T> {
-    fn drop(&mut self) {
-        debug_assert!(!self.is_null());
-        debug_assert!(!self.inner().is_null());
-
-        log::trace!("Dropping value at {:p}", self.inner().value_ptr());
-
-        self.inner_mut().rooted = false;
-    }
-}
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-#[repr(u8)]
-pub(crate) enum ContainingHeap {
-    Eden,
-    Intermediate(usize),
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct RootedInner {
-    value: *mut HeapValue<dyn Any>,
-    rooted: bool,
-    color: Color,
-    heap: ContainingHeap,
-    size: usize,
-    __pinned: PhantomPinned,
-}
-
-impl RootedInner {
-    pub(crate) fn new<T: Any + 'static>(ptr: *mut HeapValue<T>, heap: ContainingHeap) -> Self {
-        Self {
-            value: ptr,
-            rooted: true,
-            color: Color::White,
-            heap,
-            size: mem::size_of::<HeapValue<T>>(),
-            __pinned: PhantomPinned,
-        }
-    }
-
-    pub(crate) const fn size(&self) -> usize {
-        self.size
-    }
-
-    pub(crate) const fn is_rooted(&self) -> bool {
-        self.rooted
-    }
-
-    pub(crate) const fn color(&self) -> Color {
-        self.color
-    }
-
-    pub(crate) const fn containing_heap(&self) -> ContainingHeap {
-        self.heap
-    }
-
-    pub(crate) fn value(&self) -> &HeapValue<dyn Any> {
-        unsafe { &*self.value }
-    }
-
-    #[inline]
-    pub(crate) fn value_mut(&mut self) -> &mut HeapValue<dyn Any> {
-        unsafe { &mut *self.value }
-    }
-
-    pub(crate) fn is_null(&self) -> bool {
-        self.value.is_null()
-    }
-
-    pub(crate) fn value_ptr(&self) -> *mut HeapValue<dyn Any> {
-        self.value
-    }
-}
 
 pub struct BumpHeap {
     young_start: HeapPointer,
@@ -163,26 +29,27 @@ impl BumpHeap {
         )
         .unwrap();
 
-        let total_heap_size = layout.size() + memory::padding_for(layout.size(), layout.align());
-
-        let allocation = HeapPointer::new(unsafe { alloc::alloc_zeroed(layout) as usize });
-        assert!(!allocation.is_null());
+        let allocation = unsafe {
+            let allocation = HeapPointer::new(alloc::alloc::alloc_zeroed(layout) as usize);
+            assert!(!allocation.is_null());
+            allocation
+        };
 
         let (young_start, young_current) = (allocation, allocation);
-        let young_end = (young_start + total_heap_size) - options.old_heap_size;
+        let young_end = (young_start + layout.size()) - options.old_heap_size;
 
-        log::info!(
+        info!(
             "Constructed bump allocator with {}kb young generation and {}kb old generation for a total of {}kb allocated",
             (*young_end - *young_start) / 1024,
             options.old_heap_size / 1024,
-            total_heap_size / 1024,
+            layout.size() / 1024,
         );
 
         Self {
             young_start,
             young_current,
             young_end,
-            heap_size: total_heap_size,
+            heap_size: layout.size(),
             intermediate: ManuallyDrop::new(SweepHeap::from_region(
                 young_end.offset(1),
                 options.old_heap_size,
@@ -193,11 +60,11 @@ impl BumpHeap {
 
     pub unsafe fn alloc<T: Sized + Any + 'static>(&mut self, value: T) -> Rooted<T> {
         let allocation_size = mem::size_of::<HeapValue<T>>();
-        log::trace!("Allocating object of size {}", allocation_size);
+        trace!("Allocating object of size {}", allocation_size);
 
         // TODO: https://fitzgeraldnick.com/2019/11/01/always-bump-downwards.html
         if self.young_current + allocation_size > self.young_end {
-            log::trace!("Young generation OOM, starting scavenge");
+            trace!("Young generation OOM, starting scavenge");
             self.scavenge();
 
             if self.young_current + allocation_size > self.young_end {
@@ -221,13 +88,13 @@ impl BumpHeap {
 
         self.roots.push(inner);
 
-        log::trace!("Allocated object successfully at {:p}", rooted_ptr);
+        trace!("Allocated object successfully at {:p}", rooted_ptr);
 
         Rooted::new(rooted_ptr)
     }
 
     pub fn scavenge(&mut self) {
-        log::info!("Starting Scavenge cycle");
+        info!("Starting Scavenge cycle");
 
         let mut roots = Vec::with_capacity(self.roots.len());
         mem::swap(&mut self.roots, &mut roots);
@@ -279,7 +146,7 @@ impl BumpHeap {
             }
         }
 
-        log::trace!("Finished processing roots");
+        trace!("Finished processing roots");
 
         // Zero out the young heap
         unsafe {
@@ -289,28 +156,35 @@ impl BumpHeap {
         }
         self.young_current = self.young_start;
 
-        log::info!("Finished Scavenge cycle");
+        info!("Finished Scavenge cycle");
     }
 
     pub fn major(&mut self) {
-        log::info!("Starting a Major cleanup cycle");
+        info!("Starting a Major cleanup cycle");
 
         self.intermediate.collect(&mut self.roots);
 
-        log::info!("Finished a Major cleanup cycle");
+        info!("Finished a Major cleanup cycle");
     }
 }
 
 impl Drop for BumpHeap {
     fn drop(&mut self) {
-        log::info!("Dropping Bump Heap");
+        info!("Dropping Bump Heap");
 
         let layout = Layout::from_size_align(self.heap_size, memory::page_size()).unwrap();
 
-        unsafe { alloc::dealloc(self.young_start.as_mut_ptr(), layout) };
+        unsafe { alloc::alloc::dealloc(self.young_start.as_mut_ptr(), layout) };
     }
 }
 
+impl Default for BumpHeap {
+    fn default() -> Self {
+        Self::new(BumpOptions::default())
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct BumpOptions {
     young_heap_size: usize,
     old_heap_size: usize,
@@ -325,38 +199,33 @@ impl Default for BumpOptions {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct BumpAllocation {
-    pub(crate) ptr: HeapPointer,
-    pub(crate) size: usize,
-    pub(crate) children: Vec<AllocId>,
-}
-
-impl BumpAllocation {
-    pub const fn new(ptr: HeapPointer, size: usize) -> Self {
-        Self {
-            ptr,
-            size,
-            children: Vec::new(),
-        }
-    }
-
-    pub const fn size(&self) -> usize {
-        self.size
-    }
-
-    pub const fn ptr(&self) -> HeapPointer {
-        self.ptr
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn new() {
+        let _bump = BumpHeap::default();
+    }
+
+    #[test]
+    fn allocate_no_drop() {
+        let mut bump = BumpHeap::default();
+
+        let _one: ManuallyDrop<Rooted<usize>> = unsafe { ManuallyDrop::new(bump.alloc(1)) };
+    }
+
+    #[test]
+    fn allocate_no_drop_deref() {
+        let mut bump = BumpHeap::default();
+
+        let one: ManuallyDrop<Rooted<usize>> = unsafe { ManuallyDrop::new(bump.alloc(1)) };
+        assert_eq!(**one, 1usize);
+    }
+
+    #[test]
     fn allocate() {
-        let mut bump = BumpHeap::new(BumpOptions::default());
+        let mut bump = BumpHeap::default();
 
         let one_hundred: Rooted<usize> = unsafe { bump.alloc(100) };
         assert_eq!(*one_hundred, 100usize);
@@ -364,7 +233,7 @@ mod tests {
 
     #[test]
     fn trigger_scavenge() {
-        let mut bump = BumpHeap::new(BumpOptions::default());
+        let mut bump = BumpHeap::default();
 
         let i: usize = 1000;
         let rooted: Rooted<usize> = unsafe { bump.alloc(i) };
@@ -376,7 +245,7 @@ mod tests {
 
     #[test]
     fn allocate_a_bunch() {
-        let mut bump = BumpHeap::new(BumpOptions::default());
+        let mut bump = BumpHeap::default();
 
         for i in 0..4000 {
             let rooted: Rooted<usize> = unsafe { bump.alloc(i) };
@@ -387,8 +256,6 @@ mod tests {
 
     #[test]
     fn allocate_into_major() {
-        simple_logger::init();
-
         let mut bump = BumpHeap::new(BumpOptions::default());
 
         let mut roots = Vec::with_capacity(4000);

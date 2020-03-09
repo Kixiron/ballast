@@ -1,14 +1,10 @@
-use super::{
-    free_list::*,
-    memory::{self, AllocId, HeapPointer},
-    weight::*,
+use crate::{
+    free_list::FreeList,
+    memory::{self, HeapPointer},
+    rooted::RootedInner,
 };
-use crate::bump_heap::RootedInner;
-use std::{
-    alloc::{self},
-    mem,
-    pin::Pin,
-};
+use alloc::{boxed::Box, vec::Vec};
+use core::pin::Pin;
 
 #[derive(Debug)]
 pub(crate) struct SweepHeap {
@@ -19,14 +15,14 @@ pub(crate) struct SweepHeap {
 
 impl SweepHeap {
     pub fn new(size: usize) -> Self {
-        let layout = alloc::Layout::from_size_align(size, memory::page_size())
+        let layout = alloc::alloc::Layout::from_size_align(size, memory::page_size())
             .expect("Failed to create heap layout");
 
         // Safety: With a valid Layout, the allocation should be successful.
         // Additionally, the pointer is checked for `null`, so the resulting pointer
         // should also be to valid memory.
         // TODO: Is it worth it to use `alloc::alloc` over `alloc::alloc_zeroed`?
-        let start = HeapPointer::new(unsafe { alloc::alloc_zeroed(layout) } as usize);
+        let start = HeapPointer::new(unsafe { alloc::alloc::alloc_zeroed(layout) } as usize);
         assert!(!start.is_null(), "The pointer to allocated memory is null");
 
         Self {
@@ -57,7 +53,7 @@ impl SweepHeap {
     }
 
     pub fn sweep(&mut self, roots: &mut Vec<Pin<Box<RootedInner>>>) {
-        for (idx, root) in roots.iter_mut().enumerate() {}
+        unimplemented!()
     }
 
     pub fn compact(&mut self) {}
@@ -70,11 +66,11 @@ impl SweepHeap {
 
 impl Drop for SweepHeap {
     fn drop(&mut self) {
-        let layout = alloc::Layout::from_size_align(self.size, memory::page_size())
+        let layout = alloc::alloc::Layout::from_size_align(self.size, memory::page_size())
             .expect("Failed to create heap layout");
 
         // Safety: With a valid layout and a valid `start` pointer, the deallocation should be successful
-        unsafe { alloc::dealloc(self.start.as_mut_ptr(), layout) };
+        unsafe { alloc::alloc::dealloc(self.start.as_mut_ptr(), layout) };
     }
 }
 

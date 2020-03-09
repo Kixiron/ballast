@@ -1,4 +1,4 @@
-use std::ops;
+use core::ops;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
@@ -41,17 +41,15 @@ impl HeapPointer {
     }
 
     #[inline]
-    pub fn as_ref<'a, T>(self) -> &'a T {
+    pub unsafe fn as_ref<'a, T>(self) -> &'a T {
         debug_assert!(!self.is_null());
-
-        unsafe { &*(self.0 as *const T) }
+        &*(self.0 as *const T)
     }
 
     #[inline]
-    pub fn as_mut<'a, T>(self) -> &'a mut T {
+    pub unsafe fn as_mut<'a, T>(self) -> &'a mut T {
         debug_assert!(!self.is_null());
-
-        unsafe { &mut *(self.0 as *mut T) }
+        &mut *(self.0 as *mut T)
     }
 }
 

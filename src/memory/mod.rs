@@ -1,9 +1,5 @@
-use crate::log;
-
-mod alloc_id;
 mod heap_pointer;
 
-pub use alloc_id::AllocId;
 pub use heap_pointer::HeapPointer;
 
 #[inline]
@@ -13,20 +9,25 @@ pub(crate) const fn padding_for(size: usize, align: usize) -> usize {
 }
 
 #[inline(always)]
-#[cfg(target_family = "unix")]
+#[cfg(all(target_family = "unix", not(miri)))]
 pub(crate) fn page_size() -> usize {
     let size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
 
-    log::trace!("Memory Page Size: {}", size);
+    trace!("Memory Page Size: {}", size);
     assert!(size != 0);
 
     size
 }
 
-#[inline(always)]
-#[cfg(target_family = "windows")]
+#[cfg(miri)]
 pub(crate) fn page_size() -> usize {
-    use std::mem::MaybeUninit;
+    4096
+}
+
+#[inline(always)]
+#[cfg(all(target_family = "windows", not(miri)))]
+pub(crate) fn page_size() -> usize {
+    use core::mem::MaybeUninit;
     use winapi::um::sysinfoapi::{GetSystemInfo, SYSTEM_INFO};
 
     let size = unsafe {
@@ -36,7 +37,7 @@ pub(crate) fn page_size() -> usize {
         system_info.assume_init().dwPageSize as usize
     };
 
-    log::trace!("Memory Page Size: {}", size);
+    trace!("Memory Page Size: {}", size);
     assert!(size != 0);
 
     size

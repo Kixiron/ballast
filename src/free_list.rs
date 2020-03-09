@@ -1,4 +1,5 @@
-use crate::{HeapPointer, Weight};
+use crate::memory::HeapPointer;
+use alloc::vec::Vec;
 
 #[derive(Debug, Clone)]
 pub(crate) struct FreeList {
@@ -32,10 +33,6 @@ impl FreeList {
         } else {
             None
         }
-    }
-
-    pub fn reclaim(&mut self, weight: Weight) {
-        self.pockets[weight.pocket.index()].push(weight.ptr);
     }
 }
 

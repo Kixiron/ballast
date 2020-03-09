@@ -5,19 +5,14 @@ authors = ["Chase Wilson <contact@chasewilson.dev>"]
 edition = "2018"
 
 [features]
-default = ["minimalloc", "log"]
+default = []
 logging = ["log"]
 minimalloc = ["mimalloc"]
 
-[dependencies.crossbeam]
-version = "0.7.3"
-
 [dependencies.log]
 version = "0.4.8"
+default-features = false
 optional = true
-
-[dependencies.fxhash]
-version = "0.2.1"
 
 [dependencies.mimalloc]
 version = "0.1.15"
@@ -32,7 +27,9 @@ features = ["sysinfoapi"]
 libc = "0.2.66"
 
 [dev-dependencies.color-backtrace]
+default-features = false
 version = "0.3.0"
 
 [dev-dependencies.simple_logger]
+default-features = false
 version = "1.5.0"
