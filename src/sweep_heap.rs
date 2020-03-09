@@ -1,10 +1,10 @@
 use crate::{
-    free_list::FreeList,
+    free_list::{FreeList, PocketSize},
     memory::{self, HeapPointer},
-    rooted::RootedInner,
+    rooted::{ContainingHeap, RootedInner},
 };
 use alloc::{boxed::Box, vec::Vec};
-use core::pin::Pin;
+use core::{mem, pin::Pin, raw};
 
 #[derive(Debug)]
 pub(crate) struct SweepHeap {
@@ -47,20 +47,46 @@ impl SweepHeap {
     pub fn collect(&mut self, roots: &mut Vec<Pin<Box<RootedInner>>>) {
         self.sweep(roots);
 
-        if self.fragmentation() > 0.50 {
-            self.compact();
+        if dbg!(self.fragmentation()) > 0.50 {
+            self.compact(roots);
         }
     }
 
     pub fn sweep(&mut self, roots: &mut Vec<Pin<Box<RootedInner>>>) {
-        unimplemented!()
+        roots.retain(|root| {
+            if let ContainingHeap::Intermediate(pocket_size) = &root.heap {
+                if !root.is_rooted() {
+                    let raw_root: raw::TraitObject = unsafe { mem::transmute(root.value_ptr()) };
+
+                    PocketSize::reclaim(
+                        *pocket_size,
+                        HeapPointer::new(raw_root.data as usize),
+                        &mut self.free_list,
+                    );
+
+                    return false;
+                }
+            }
+
+            true
+        });
     }
 
-    pub fn compact(&mut self) {}
+    pub fn compact(&mut self, roots: &mut Vec<Pin<Box<RootedInner>>>) {
+        for root in roots {
+            if let ContainingHeap::Intermediate(pocket_size) = &root.heap {
+                // TODO: Sort by low to high?
+            }
+        }
 
+        todo!("Compact")
+    }
+
+    // TODO: Fragmentation's kinda wack
     #[inline]
     pub fn fragmentation(&self) -> f32 {
-        1.0 - (self.free_list.start.as_usize() as f32 / self.size as f32)
+        1.0 - ((self.free_list.current.as_usize() - self.free_list.start.as_usize()) as f32
+            / self.size as f32)
     }
 }
 

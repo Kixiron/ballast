@@ -2,8 +2,9 @@ use crate::memory::HeapPointer;
 use alloc::vec::Vec;
 
 #[derive(Debug, Clone)]
-pub(crate) struct FreeList {
+pub struct FreeList {
     pub(crate) start: HeapPointer,
+    pub(crate) current: HeapPointer,
     pub(crate) size: usize,
     pub(crate) pockets: [Vec<HeapPointer>; NUMBER_MEMORY_POCKETS],
 }
@@ -12,6 +13,7 @@ impl FreeList {
     pub const fn new(start: HeapPointer, size: usize) -> Self {
         Self {
             start,
+            current: start,
             size,
             pockets: create_memory_pocket_array(),
         }
@@ -19,16 +21,12 @@ impl FreeList {
 
     pub fn alloc(&mut self, size: usize) -> Option<(HeapPointer, usize)> {
         let pocket = PocketSize::next_up(size)?;
+        if self.current.offset(pocket.size()) < self.start.offset(self.size) {
+            let ptr = self.current;
+            self.current += pocket.size();
 
-        if let Some(ptr) = self.pockets[pocket.index()].pop() {
             Some((ptr, pocket.size()))
-        }
-        // TODO: Is this `<=` or `<`?
-        else if self.start.offset(pocket.size()) <= self.start.offset(self.size) {
-            let ptr = self.start;
-
-            self.start = self.start + pocket.size();
-
+        } else if let Some(ptr) = self.pockets[pocket.index()].pop() {
             Some((ptr, pocket.size()))
         } else {
             None
@@ -51,6 +49,7 @@ macro_rules! pocket {
         }
 
         impl PocketSize {
+            #[inline]
             pub fn from_usize(pocket: usize) -> Self {
                 match pocket {
                     0 => PocketSize::$variant1,
@@ -61,6 +60,7 @@ macro_rules! pocket {
                 }
             }
 
+            #[inline]
             pub fn from_pocket_size(size: usize) -> Self {
                 if size == $name1 {
                     PocketSize::$variant1
@@ -71,6 +71,7 @@ macro_rules! pocket {
                 }
             }
 
+            #[inline]
             pub fn next_up(size: usize) -> Option<PocketSize> {
                 assert!(size >= $name1);
 
@@ -83,6 +84,7 @@ macro_rules! pocket {
                 }
             }
 
+            #[inline]
             pub fn next_down(size: usize) -> Option<PocketSize> {
                 assert!(size >= $name1);
 
@@ -101,6 +103,12 @@ macro_rules! pocket {
 
             pub const fn size(&self) -> usize {
                 MEMORY_POCKETS[self.index()]
+            }
+
+            #[inline]
+            pub fn reclaim(size: usize, ptr: HeapPointer, list: &mut FreeList) {
+                let pocket = PocketSize::from_pocket_size(size);
+                list.pockets[pocket.index()].push(ptr);
             }
         }
 

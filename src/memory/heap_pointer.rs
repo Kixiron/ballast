@@ -6,7 +6,8 @@ pub struct HeapPointer(usize);
 
 impl HeapPointer {
     #[inline]
-    pub const fn new(ptr: usize) -> Self {
+    pub fn new(ptr: usize) -> Self {
+        assert!(ptr != 0);
         Self(ptr)
     }
 
@@ -26,8 +27,8 @@ impl HeapPointer {
     }
 
     #[inline]
-    pub const fn offset(self, offset: usize) -> Self {
-        Self(self.0 + offset)
+    pub fn offset(self, offset: usize) -> Self {
+        Self::new(self.0 + offset)
     }
 
     #[inline]
@@ -57,13 +58,15 @@ impl<T: Into<usize>> ops::Add<T> for HeapPointer {
     type Output = Self;
 
     fn add(self, other: T) -> Self::Output {
-        Self(self.0 + other.into())
+        Self::new(self.0 + other.into())
     }
 }
 
 impl<T: Into<usize>> ops::AddAssign<T> for HeapPointer {
     fn add_assign(&mut self, other: T) {
-        self.0 += other.into()
+        let other = other.into();
+        assert!(self.0 + other != 0);
+        self.0 += other;
     }
 }
 
@@ -71,7 +74,7 @@ impl<T: Into<usize>> ops::Sub<T> for HeapPointer {
     type Output = Self;
 
     fn sub(self, other: T) -> Self::Output {
-        Self(self.0 - other.into())
+        Self::new(self.0 - other.into())
     }
 }
 
@@ -85,7 +88,7 @@ impl<T: Into<usize>> ops::Mul<T> for HeapPointer {
     type Output = Self;
 
     fn mul(self, other: T) -> Self::Output {
-        Self(self.0 * other.into())
+        Self::new(self.0 * other.into())
     }
 }
 
@@ -99,7 +102,7 @@ impl<T: Into<usize>> ops::Div<T> for HeapPointer {
     type Output = Self;
 
     fn div(self, other: T) -> Self::Output {
-        Self(self.0 + other.into())
+        Self::new(self.0 + other.into())
     }
 }
 
@@ -113,7 +116,7 @@ impl<T: Into<usize>> ops::BitAnd<T> for HeapPointer {
     type Output = Self;
 
     fn bitand(self, other: T) -> Self::Output {
-        Self(self.0 & other.into())
+        Self::new(self.0 & other.into())
     }
 }
 
@@ -127,7 +130,7 @@ impl<T: Into<usize>> ops::BitOr<T> for HeapPointer {
     type Output = Self;
 
     fn bitor(self, other: T) -> Self::Output {
-        Self(self.0 | other.into())
+        Self::new(self.0 | other.into())
     }
 }
 
@@ -141,7 +144,7 @@ impl<T: Into<usize>> ops::BitXor<T> for HeapPointer {
     type Output = Self;
 
     fn bitxor(self, other: T) -> Self::Output {
-        Self(self.0 ^ other.into())
+        Self::new(self.0 ^ other.into())
     }
 }
 
@@ -155,7 +158,7 @@ impl<T: Into<usize>> ops::Shl<T> for HeapPointer {
     type Output = Self;
 
     fn shl(self, other: T) -> Self::Output {
-        Self(self.0 << other.into())
+        Self::new(self.0 << other.into())
     }
 }
 
@@ -169,7 +172,7 @@ impl<T: Into<usize>> ops::Shr<T> for HeapPointer {
     type Output = Self;
 
     fn shr(self, other: T) -> Self::Output {
-        Self(self.0 >> other.into())
+        Self::new(self.0 >> other.into())
     }
 }
 
@@ -183,7 +186,7 @@ impl ops::Not for HeapPointer {
     type Output = Self;
 
     fn not(self) -> Self::Output {
-        Self(!self.0)
+        Self::new(!self.0)
     }
 }
 
@@ -198,20 +201,20 @@ impl ops::Deref for HeapPointer {
 impl From<usize> for HeapPointer {
     #[inline]
     fn from(ptr: usize) -> Self {
-        Self(ptr)
+        Self::new(ptr)
     }
 }
 
 impl<T> From<*mut T> for HeapPointer {
     #[inline]
     fn from(ptr: *mut T) -> Self {
-        Self(ptr as usize)
+        Self::new(ptr as usize)
     }
 }
 
 impl<T> From<*const T> for HeapPointer {
     #[inline]
     fn from(ptr: *const T) -> Self {
-        Self(ptr as usize)
+        Self::new(ptr as usize)
     }
 }

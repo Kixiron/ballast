@@ -15,7 +15,7 @@ default-features = false
 optional = true
 
 [dependencies.mimalloc]
-version = "0.1.15"
+version = "0.1.17"
 optional = true
 
 [target.'cfg(target_family = "windows")'.dependencies.winapi]
@@ -24,7 +24,7 @@ default-features = false
 features = ["sysinfoapi"]
 
 [target.'cfg(target_family = "unix")'.dependencies]
-libc = "0.2.66"
+libc = "0.2.67"
 
 [dev-dependencies.color-backtrace]
 default-features = false
@@ -32,4 +32,4 @@ version = "0.3.0"
 
 [dev-dependencies.simple_logger]
 default-features = false
-version = "1.5.0"
+version = "1.6.0"

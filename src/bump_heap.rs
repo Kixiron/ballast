@@ -36,11 +36,11 @@ impl BumpHeap {
         };
 
         let (young_start, young_current) = (allocation, allocation);
-        let young_end = (young_start + layout.size()) - options.old_heap_size;
+        let young_end = allocation + options.young_heap_size;
 
         info!(
             "Constructed bump allocator with {}kb young generation and {}kb old generation for a total of {}kb allocated",
-            (*young_end - *young_start) / 1024,
+            options.young_heap_size / 1024,
             options.old_heap_size / 1024,
             layout.size() / 1024,
         );
@@ -109,10 +109,10 @@ impl BumpHeap {
                     ptr = _ptr;
 
                     unsafe {
+                        ptr::copy(root.value_ptr() as *const u8, ptr.as_mut_ptr::<u8>(), size);
+
                         root.as_mut().get_unchecked_mut().heap =
                             ContainingHeap::Intermediate(pocket_size);
-
-                        ptr::copy(root.value_ptr() as *const u8, ptr.as_mut_ptr::<u8>(), size);
                     }
                 } else {
                     self.major();
@@ -258,15 +258,37 @@ mod tests {
     fn allocate_into_major() {
         let mut bump = BumpHeap::new(BumpOptions::default());
 
-        let mut roots = Vec::with_capacity(4000);
-        for i in 0..4000 {
+        let mut permanent = Vec::with_capacity(50);
+        for i in 0..100 {
             let rooted: Rooted<usize> = unsafe { bump.alloc(i) };
             assert_eq!(*rooted, i);
-            roots.push((rooted, i));
+            permanent.push((rooted, i));
         }
 
-        for (rooted, i) in roots {
-            assert_eq!(*rooted, i);
+        bump.major();
+        println!("here");
+        for (perm, i) in &permanent {
+            assert_eq!(**perm, *i);
         }
+        println!("here");
+
+        println!("here");
+        for i in 0..1000 {
+            let rooted: Rooted<usize> = unsafe { bump.alloc(i) };
+            assert_eq!(*rooted, i);
+            drop(rooted);
+        }
+        println!("here");
+
+        bump.major();
+        println!("here");
+        for (perm, i) in permanent {
+            assert_eq!(*perm, i);
+            drop(perm);
+        }
+        println!("here");
+
+        bump.major();
+        println!("here");
     }
 }
