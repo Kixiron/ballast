@@ -40,4 +40,5 @@ mod memory;
 mod rooted;
 mod sweep_heap;
 
-pub use bump_heap::BumpHeap;
+pub use bump_heap::{BumpHeap, BumpOptions};
+pub use rooted::Rooted;
