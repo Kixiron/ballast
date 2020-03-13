@@ -15,7 +15,7 @@ default-features = false
 optional = true
 
 [dependencies.mimalloc]
-version = "0.1.17"
+version = "0.1.18"
 optional = true
 
 [target.'cfg(target_family = "windows")'.dependencies.winapi]
